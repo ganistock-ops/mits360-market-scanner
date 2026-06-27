@@ -15,88 +15,94 @@ CLIENT_ID = os.environ.get("ANGEL_CLIENT_ID", "")
 MPIN = os.environ.get("ANGEL_MPIN", "")
 TOTP_SECRET = os.environ.get("ANGEL_TOTP_SECRET", "")
 
-def get_angel_session():
+NIFTY50 = [
+    "RELIANCE","TCS","HDFCBANK","ICICIBANK","INFY","ITC","SBIN",
+    "BHARTIARTL","KOTAKBANK","LT","AXISBANK","ASIANPAINT","MARUTI",
+    "TITAN","SUNPHARMA","WIPRO","ONGC","NTPC","ULTRACEMCO","POWERGRID",
+    "BAJFINANCE","HCLTECH","JSWSTEEL","TATASTEEL","ADANIENT","ADANIPORTS",
+    "COALINDIA","NESTLEIND","TECHM","DIVISLAB","DRREDDY","CIPLA","GRASIM",
+    "HINDALCO","INDUSINDBK","BPCL","TATACONSUM","BAJAJFINSV","EICHERMOT",
+    "HEROMOTOCO","BRITANNIA","TATAMOTORS","M&M","SBILIFE","HDFCLIFE",
+    "SHREECEM","BAJAJ-AUTO","TRENT","APOLLOHOSP","DMART"
+]
+
+def get_session():
     try:
         obj = SmartConnect(api_key=API_KEY)
         totp = pyotp.TOTP(TOTP_SECRET).now()
         data = obj.generateSession(CLIENT_ID, MPIN, totp)
-        if data["status"]:
+        if data and data.get("status"):
             return obj
     except Exception as e:
-        print(f"Angel login error: {e}")
+        print(f"Login error: {e}")
     return None
-
-def parse_gainers_losers(data, key="gainers"):
-    try:
-        items = data.get("data", {}).get(key, [])
-        result = []
-        for item in items[:10]:
-            result.append({
-                "symbol": item.get("tradingSymbol", "").replace("-EQ",""),
-                "price": round(float(item.get("ltp", 0)), 2),
-                "change_pct": round(float(item.get("percentChange", 0)), 2),
-                "volume": int(item.get("tradedVolume", 0))
-            })
-        return result
-    except:
-        return []
 
 @app.route('/api/scanner', methods=['GET'])
 def scanner():
     try:
         now = datetime.now(IST)
-        obj = get_angel_session()
+        obj = get_session()
         if not obj:
-            return jsonify({"status": "error", "message": "Angel One login failed. Check credentials."}), 500
+            return jsonify({"status": "error", "message": "Angel One login failed."}), 500
 
-        # Top Gainers & Losers — NSE Cash
-        gainers_raw = obj.gainersLosers({"expiryType": "NEAR", "dataType": "PercOIGainers", "expiryType": "NEAR"})
+        # Fetch quotes for all Nifty 50 stocks
+        token_map = {
+            "RELIANCE":"2885","TCS":"11536","HDFCBANK":"1333","ICICIBANK":"4963",
+            "INFY":"1594","ITC":"1660","SBIN":"3045","BHARTIARTL":"10604",
+            "KOTAKBANK":"1922","LT":"11483","AXISBANK":"5900","ASIANPAINT":"236",
+            "MARUTI":"10999","TITAN":"3506","SUNPHARMA":"3351","WIPRO":"3787",
+            "ONGC":"2475","NTPC":"11630","ULTRACEMCO":"11532","POWERGRID":"14977",
+            "BAJFINANCE":"317","HCLTECH":"7229","JSWSTEEL":"11723","TATASTEEL":"3408",
+            "ADANIENT":"25","ADANIPORTS":"15083","COALINDIA":"20374","NESTLEIND":"17963",
+            "TECHM":"13538","DIVISLAB":"10940","DRREDDY":"881","CIPLA":"694",
+            "GRASIM":"1232","HINDALCO":"1363","INDUSINDBK":"5258","BPCL":"526",
+            "TATACONSUM":"3432","BAJAJFINSV":"16675","EICHERMOT":"910","HEROMOTOCO":"1348",
+            "BRITANNIA":"547","TATAMOTORS":"3456","M&M":"519","SBILIFE":"21808",
+            "HDFCLIFE":"467","SHREECEM":"24349","BAJAJ-AUTO":"16669","TRENT":"1964",
+            "APOLLOHOSP":"157","DMART":"19913"
+        }
+
+        exchange_tokens = {"NSE": list(token_map.values())}
         
-        # Use NSE market data
-        gainers = []
-        losers = []
-        high52 = []
-        low52 = []
-        vol_shocker = []
-
-        # Fetch Nifty 50 quotes for gainers/losers
-        nifty50 = [
-            "RELIANCE","TCS","HDFCBANK","ICICIBANK","INFY","ITC","SBIN",
-            "BHARTIARTL","KOTAKBANK","LT","AXISBANK","ASIANPAINT","MARUTI",
-            "TITAN","SUNPHARMA","WIPRO","ONGC","NTPC","ULTRACEMCO","POWERGRID",
-            "BAJFINANCE","HCLTECH","JSWSTEEL","TATASTEEL","ADANIENT","ADANIPORTS",
-            "COALINDIA","NESTLEIND","TECHM","DIVISLAB","DRREDDY","CIPLA","GRASIM",
-            "HINDALCO","INDUSINDBK","BPCL","TATACONSUM","BAJAJFINSV","EICHERMOT",
-            "HEROMOTOCO","BRITANNIA","TATAMOTORS","M&M","SBILIFE","HDFCLIFE",
-            "SHREECEM","BAJAJ-AUTO","TRENT","APOLLOHOSP","DMART"
-        ]
-
+        quote_data = obj.getMarketData("FULL", exchange_tokens)
+        
         stocks = []
-        for sym in nifty50:
-            try:
-                ltp_data = obj.ltpData("NSE", sym+"-EQ", "")
-                if ltp_data and ltp_data.get("status"):
-                    d = ltp_data["data"]
-                    price = float(d.get("ltp", 0))
-                    close = float(d.get("close", price))
-                    change_pct = ((price - close) / close * 100) if close > 0 else 0
+        if quote_data and quote_data.get("status"):
+            fetched = quote_data.get("data", {}).get("fetched", [])
+            sym_map = {v: k for k, v in token_map.items()}
+            
+            for item in fetched:
+                try:
+                    token = str(item.get("symbolToken", ""))
+                    sym = sym_map.get(token, token)
+                    ltp = float(item.get("ltp", 0))
+                    close = float(item.get("close", ltp))
+                    high52 = float(item.get("fiftyTwoWeekHighPrice", ltp))
+                    low52 = float(item.get("fiftyTwoWeekLowPrice", ltp))
+                    vol = int(item.get("tradedVolume", 0))
+                    avg_vol = int(item.get("averageTradedPrice", vol) or vol)
+                    change_pct = ((ltp - close) / close * 100) if close > 0 else 0
+                    vol_ratio = round(vol / avg_vol, 2) if avg_vol > 0 else 1.0
+
                     stocks.append({
                         "symbol": sym,
-                        "price": round(price, 2),
+                        "price": round(ltp, 2),
                         "change_pct": round(change_pct, 2),
-                        "volume": 0,
-                        "vol_ratio": 1.0,
-                        "week52_high": round(float(d.get("high", price)), 2),
-                        "week52_low": round(float(d.get("low", price)), 2),
+                        "volume": vol,
+                        "vol_ratio": vol_ratio,
+                        "week52_high": round(high52, 2),
+                        "week52_low": round(low52, 2),
+                        "near_52w_high": ltp >= high52 * 0.97 if high52 > 0 else False,
+                        "near_52w_low": ltp <= low52 * 1.03 if low52 > 0 else False,
                     })
-            except:
-                continue
+                except:
+                    continue
 
         gainers = sorted([s for s in stocks if s['change_pct'] > 0], key=lambda x: x['change_pct'], reverse=True)[:10]
         losers = sorted([s for s in stocks if s['change_pct'] < 0], key=lambda x: x['change_pct'])[:10]
-        high52 = sorted(stocks, key=lambda x: x['week52_high'], reverse=True)[:10]
-        low52 = sorted(stocks, key=lambda x: x['week52_low'])[:10]
-        vol_shocker = stocks[:10]
+        high52 = sorted([s for s in stocks if s['near_52w_high']], key=lambda x: x['change_pct'], reverse=True)[:10]
+        low52 = sorted([s for s in stocks if s['near_52w_low']], key=lambda x: x['change_pct'])[:10]
+        vol_shocker = sorted(stocks, key=lambda x: x['vol_ratio'], reverse=True)[:10]
 
         return jsonify({
             "status": "success",
